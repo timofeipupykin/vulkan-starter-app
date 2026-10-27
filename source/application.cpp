@@ -1,5 +1,7 @@
 #include "application.hpp"
 
+#include <cstddef>
+#include <cstdint>
 #include <iostream>
 
 #include <imgui.h>
@@ -10,7 +12,37 @@ namespace application {
 
 namespace {
 
+struct Vertex {
+	float position[3];
+	float color[3];
+};
+
+// Regular square pyramid: base 2x2 at y = -0.75, apex at y = 0.75.
+// Origin is in the middle of the height, so the pyramid rotates around itself.
+const Vertex pyramid_vertices[] = {
+	{{-1.0f, -0.75f, -1.0f}, {1.0f, 0.0f, 0.0f}}, // 0: base, red
+	{{ 1.0f, -0.75f, -1.0f}, {0.0f, 1.0f, 0.0f}}, // 1: base, green
+	{{ 1.0f, -0.75f,  1.0f}, {0.0f, 0.0f, 1.0f}}, // 2: base, blue
+	{{-1.0f, -0.75f,  1.0f}, {1.0f, 1.0f, 0.0f}}, // 3: base, yellow
+	{{ 0.0f,  0.75f,  0.0f}, {1.0f, 1.0f, 1.0f}}, // 4: apex, white
+};
+
+// Triangles are counter-clockwise when looking at the face from outside
+const uint32_t pyramid_indices[] = {
+	0, 4, 1, // side -Z
+	1, 4, 2, // side +X
+	2, 4, 3, // side +Z
+	3, 4, 0, // side -X
+	0, 1, 2, // base
+	0, 2, 3, // base
+};
+
+constexpr uint32_t pyramid_index_count = sizeof(pyramid_indices) / sizeof(pyramid_indices[0]);
+
 float clear_color[3] = {0.1f, 0.1f, 0.12f};
+
+graphics::Buffer vertex_buffer;
+graphics::Buffer index_buffer;
 
 VkPipelineLayout pipeline_layout;
 VkPipeline pipeline;
@@ -42,8 +74,33 @@ bool createPipeline() {
 		},
 	};
 
+	const VkVertexInputBindingDescription vertex_binding = {
+		.binding = 0,
+		.stride = sizeof(Vertex),
+		.inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+	};
+
+	const VkVertexInputAttributeDescription vertex_attributes[] = {
+		{
+			.location = 0,
+			.binding = 0,
+			.format = VK_FORMAT_R32G32B32_SFLOAT,
+			.offset = offsetof(Vertex, position),
+		},
+		{
+			.location = 1,
+			.binding = 0,
+			.format = VK_FORMAT_R32G32B32_SFLOAT,
+			.offset = offsetof(Vertex, color),
+		},
+	};
+
 	const VkPipelineVertexInputStateCreateInfo vertex_input = {
 		.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+		.vertexBindingDescriptionCount = 1,
+		.pVertexBindingDescriptions = &vertex_binding,
+		.vertexAttributeDescriptionCount = sizeof(vertex_attributes) / sizeof(vertex_attributes[0]),
+		.pVertexAttributeDescriptions = vertex_attributes,
 	};
 
 	const VkPipelineInputAssemblyStateCreateInfo input_assembly = {
@@ -147,6 +204,15 @@ bool createPipeline() {
 } // namespace
 
 bool initialize() {
+	vertex_buffer = graphics::createBuffer(sizeof(pyramid_vertices),
+	                                       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, pyramid_vertices);
+	index_buffer = graphics::createBuffer(sizeof(pyramid_indices),
+	                                      VK_BUFFER_USAGE_INDEX_BUFFER_BIT, pyramid_indices);
+
+	if (vertex_buffer.buffer == VK_NULL_HANDLE || index_buffer.buffer == VK_NULL_HANDLE) {
+		return false;
+	}
+
 	if (!createPipeline()) {
 		return false;
 	}
@@ -160,6 +226,9 @@ void shutdown() {
 
 	vkDestroyPipeline(context.device, pipeline, nullptr);
 	vkDestroyPipelineLayout(context.device, pipeline_layout, nullptr);
+
+	graphics::destroyBuffer(index_buffer);
+	graphics::destroyBuffer(vertex_buffer);
 }
 
 void update([[maybe_unused]] double time) {
@@ -215,7 +284,12 @@ void render(const graphics::internal::FrameData& fd) {
 	vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 	vkCmdSetViewport(cb, 0, 1, &viewport);
 	vkCmdSetScissor(cb, 0, 1, &scissor);
-	vkCmdDraw(cb, 3, 1, 0, 0);
+
+	const VkDeviceSize vertex_offset = 0;
+	vkCmdBindVertexBuffers(cb, 0, 1, &vertex_buffer.buffer, &vertex_offset);
+	vkCmdBindIndexBuffer(cb, index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+	vkCmdDrawIndexed(cb, pyramid_index_count, 1, 0, 0, 0);
 
 	vkCmdEndRenderPass(cb);
 
