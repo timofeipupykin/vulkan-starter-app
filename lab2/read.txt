@@ -1,0 +1,1 @@
+Про источники освещения и их реализацию можно почитать тут: https://learnopengl.com/lighting/light-casters
