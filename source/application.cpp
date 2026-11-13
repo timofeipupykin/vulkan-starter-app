@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <vector>
 
 #include <imgui.h>
 
@@ -14,48 +15,65 @@ namespace application {
 namespace {
 
 struct Vertex {
-	float position[3];
-	float color[3];
+	math::vec3 position;
+	math::vec3 normal;
 };
 
-// Regular square pyramid: base 2x2 at y = -0.75, apex at y = 0.75.
-// Origin is in the middle of the height, so the pyramid rotates around itself.
-const Vertex pyramid_vertices[] = {
-	{{-1.0f, -0.75f, -1.0f}, {1.0f, 0.0f, 0.0f}}, // 0: base, red
-	{{ 1.0f, -0.75f, -1.0f}, {0.0f, 1.0f, 0.0f}}, // 1: base, green
-	{{ 1.0f, -0.75f,  1.0f}, {0.0f, 0.0f, 1.0f}}, // 2: base, blue
-	{{-1.0f, -0.75f,  1.0f}, {1.0f, 1.0f, 0.0f}}, // 3: base, yellow
-	{{ 0.0f,  0.75f,  0.0f}, {1.0f, 1.0f, 1.0f}}, // 4: apex, white
-};
-
-// Triangles are counter-clockwise when looking at the face from outside
-const uint32_t pyramid_indices[] = {
-	0, 4, 1, // side -Z
-	1, 4, 2, // side +X
-	2, 4, 3, // side +Z
-	3, 4, 0, // side -X
-	0, 1, 2, // base
-	0, 2, 3, // base
-};
-
-constexpr uint32_t pyramid_index_count = sizeof(pyramid_indices) / sizeof(pyramid_indices[0]);
-
-// Must match "uniform Uniforms" block in shaders/pyramid.vert (std140 layout)
+// Must match "uniform Uniforms" block in shaders/pyramid.vert and shaders/pyramid.frag (std140 layout).
+// vec3 is aligned to 16 bytes but takes 12, so a float fits right after it; otherwise padding is needed.
 struct Uniforms {
-	math::mat4 mvp;
+	math::mat4 model;            //   0
+	math::mat4 view_projection;  //  64
+	math::vec3 camera_position;  // 128
+	float _pad0;                 // 140: next vec3 must start at 144
+	math::vec3 ambient_color;    // 144
+	float ambient_intensity;     // 156
+	math::vec3 light_direction;  // 160: where the light goes, unit length
+	float light_intensity;       // 172
+	math::vec3 light_color;      // 176
+	float _pad1;                 // 188
+	math::vec3 albedo;           // 192
+	float _pad2;                 // 204
+	math::vec3 specular_color;   // 208
+	float shininess;             // 220
 };
 
-static_assert(sizeof(Uniforms) == 64);
+static_assert(sizeof(Uniforms) == 224);
+static_assert(offsetof(Uniforms, camera_position) == 128);
+static_assert(offsetof(Uniforms, ambient_color) == 144);
+static_assert(offsetof(Uniforms, light_direction) == 160);
+static_assert(offsetof(Uniforms, light_color) == 176);
+static_assert(offsetof(Uniforms, albedo) == 192);
+static_assert(offsetof(Uniforms, specular_color) == 208);
+
+struct Camera {
+	math::vec3 position = {0.0f, 2.0f, 6.0f};
+	float yaw_deg = 0.0f;     // rotation around Y: 0 looks along -Z, > 0 turns left
+	float pitch_deg = -18.0f; // > 0 looks up, < 0 looks down
+	float fov_deg = 60.0f;
+};
 
 // Parameters controlled from the UI
 float clear_color[3] = {0.1f, 0.1f, 0.12f};
-float rotation_speed = 1.0f; // radians per second
-float camera_distance = 4.0f;
-float camera_tilt_deg = 23.0f;
-float fov_deg = 60.0f;
+float rotation_speed = 0.5f; // radians per second
+
+Camera camera;
+
+math::vec3 ambient_color = {1.0f, 1.0f, 1.0f};
+float ambient_intensity = 0.1f;
+
+math::vec3 light_direction = {-0.4f, -1.0f, -0.3f}; // normalized in update()
+math::vec3 light_color = {1.0f, 0.95f, 0.9f};
+float light_intensity = 1.0f;
+
+math::vec3 albedo = {0.8f, 0.3f, 0.2f};
+math::vec3 specular_color = {0.5f, 0.5f, 0.5f};
+float shininess = 64.0f;
 
 float rotation_angle = 0.0f;
 double previous_time = -1.0;
+
+uint32_t pyramid_index_count = 0;
 
 Uniforms uniforms;
 
@@ -70,6 +88,56 @@ VkDescriptorSet descriptor_set;
 VkPipelineLayout pipeline_layout;
 VkPipeline pipeline;
 
+// Regular square pyramid: base 2x2 at y = -0.75, apex at y = 0.75.
+// Origin is in the middle of the height, so the pyramid rotates around itself.
+// Each face is a convex polygon of corner indices, counter-clockwise when looking from outside.
+// Every face gets its own vertices with the face normal, so the faces are lit flat.
+void buildPyramid(std::vector<Vertex>& vertices, std::vector<uint32_t>& indices) {
+	const math::vec3 corners[] = {
+		{-1.0f, -0.75f, -1.0f}, // 0: base
+		{ 1.0f, -0.75f, -1.0f}, // 1: base
+		{ 1.0f, -0.75f,  1.0f}, // 2: base
+		{-1.0f, -0.75f,  1.0f}, // 3: base
+		{ 0.0f,  0.75f,  0.0f}, // 4: apex
+	};
+
+	const std::vector<uint32_t> faces[] = {
+		{0, 4, 1},    // side -Z
+		{1, 4, 2},    // side +X
+		{2, 4, 3},    // side +Z
+		{3, 4, 0},    // side -X
+		{0, 1, 2, 3}, // base, looks down
+	};
+
+	for (const std::vector<uint32_t>& face : faces) {
+		const math::vec3 a = corners[face[0]];
+		const math::vec3 b = corners[face[1]];
+		const math::vec3 c = corners[face[2]];
+
+		// Counter-clockwise from outside, so the cross product points outwards
+		const math::vec3 normal = math::normalize(math::cross(b - a, c - a));
+
+		const uint32_t first = uint32_t(vertices.size());
+
+		for (uint32_t corner : face) {
+			vertices.push_back({corners[corner], normal});
+		}
+
+		// Triangle fan: (0, 1, 2), (0, 2, 3), ...
+		for (uint32_t i = 1; i + 1 < face.size(); ++i) {
+			indices.insert(indices.end(), {first, first + i, first + i + 1});
+		}
+	}
+}
+
+// Direction from the UI may be zero: fall back to "straight down" instead of NaN
+math::vec3 safeDirection(math::vec3 direction) {
+	if (math::length(direction) < 1e-4f) {
+		return {0.0f, -1.0f, 0.0f};
+	}
+	return math::normalize(direction);
+}
+
 bool createDescriptorSet() {
 	auto& context = graphics::internal::context;
 
@@ -77,7 +145,8 @@ bool createDescriptorSet() {
 		.binding = 0,
 		.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 		.descriptorCount = 1,
-		.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+		// Fragment shader reads camera, light and material from the same buffer
+		.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
 	};
 
 	const VkDescriptorSetLayoutCreateInfo set_layout = {
@@ -186,7 +255,7 @@ bool createPipeline() {
 			.location = 1,
 			.binding = 0,
 			.format = VK_FORMAT_R32G32B32_SFLOAT,
-			.offset = offsetof(Vertex, color),
+			.offset = offsetof(Vertex, normal),
 		},
 	};
 
@@ -301,10 +370,19 @@ bool createPipeline() {
 } // namespace
 
 bool initialize() {
-	vertex_buffer = graphics::createBuffer(sizeof(pyramid_vertices),
-	                                       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, pyramid_vertices);
-	index_buffer = graphics::createBuffer(sizeof(pyramid_indices),
-	                                      VK_BUFFER_USAGE_INDEX_BUFFER_BIT, pyramid_indices);
+	// Vectors are needed only here: createBuffer copies the data into the buffer right away
+	std::vector<Vertex> pyramid_vertices;
+	std::vector<uint32_t> pyramid_indices;
+	buildPyramid(pyramid_vertices, pyramid_indices);
+
+	pyramid_index_count = uint32_t(pyramid_indices.size());
+
+	vertex_buffer = graphics::createBuffer(pyramid_vertices.size() * sizeof(Vertex),
+	                                       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+	                                       pyramid_vertices.data());
+	index_buffer = graphics::createBuffer(pyramid_indices.size() * sizeof(uint32_t),
+	                                      VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+	                                      pyramid_indices.data());
 
 	uniform_buffer = graphics::createBuffer(sizeof(Uniforms),
 	                                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, nullptr);
@@ -352,24 +430,69 @@ void update(double time) {
 	// Accumulate the angle, so changing the speed doesn't make the pyramid jump
 	rotation_angle += delta_time * rotation_speed;
 
-	ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_FirstUseEver);
-	ImGui::Begin("Lab 1");
+	ImGui::SetNextWindowSize(ImVec2(400.0f, 0.0f), ImGuiCond_FirstUseEver);
+	ImGui::Begin("Lab 2");
 	ImGui::ColorEdit3("Background", clear_color);
 	ImGui::SliderFloat("Rotation speed", &rotation_speed, 0.0f, 3.0f);
-	ImGui::SliderFloat("Distance", &camera_distance, 2.0f, 10.0f);
-	ImGui::SliderFloat("Tilt", &camera_tilt_deg, -80.0f, 80.0f);
-	ImGui::SliderFloat("FOV", &fov_deg, 20.0f, 120.0f);
+
+	// Ctrl+Click allows typing a value out of the slider range, AlwaysClamp forbids that
+	if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::DragFloat3("Position", &camera.position.x, 0.05f);
+		ImGui::SliderFloat("Yaw", &camera.yaw_deg, -180.0f, 180.0f);
+		ImGui::SliderFloat("Pitch", &camera.pitch_deg, -89.0f, 89.0f, "%.1f",
+		                   ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("FOV", &camera.fov_deg, 20.0f, 120.0f, "%.1f",
+		                   ImGuiSliderFlags_AlwaysClamp);
+	}
+
+	// Sections have widgets with the same labels, so each section gets its own ID
+	if (ImGui::CollapsingHeader("Ambient", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::PushID("ambient");
+		ImGui::ColorEdit3("Color", &ambient_color.x);
+		ImGui::SliderFloat("Intensity", &ambient_intensity, 0.0f, 1.0f);
+		ImGui::PopID();
+	}
+
+	if (ImGui::CollapsingHeader("Directional light", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::PushID("light");
+		ImGui::DragFloat3("Direction", &light_direction.x, 0.02f);
+		ImGui::ColorEdit3("Color", &light_color.x);
+		ImGui::SliderFloat("Intensity", &light_intensity, 0.0f, 5.0f);
+		ImGui::PopID();
+	}
+
+	if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::ColorEdit3("Albedo", &albedo.x);
+		ImGui::ColorEdit3("Specular", &specular_color.x);
+		// pow(0, 0) is undefined, so shininess is at least 1
+		ImGui::SliderFloat("Shininess", &shininess, 1.0f, 256.0f, "%.1f",
+		                   ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+	}
+
 	ImGui::End();
 
 	const VkExtent2D extent = graphics::internal::context.swapchain_extent;
 	const float aspect = float(extent.width) / float(extent.height);
 
-	const math::mat4 model = math::rotateY(rotation_angle);
-	const math::mat4 view = math::translate(0.0f, 0.0f, -camera_distance) *
-	                        math::rotateX(math::radians(camera_tilt_deg));
-	const math::mat4 projection = math::perspective(math::radians(fov_deg), aspect, 0.1f, 100.0f);
+	// Camera in the world is translate(p) * rotateY(yaw) * rotateX(pitch),
+	// view matrix is its inverse: inverse transforms in reverse order
+	const math::mat4 view = math::rotateX(math::radians(-camera.pitch_deg)) *
+	                        math::rotateY(math::radians(-camera.yaw_deg)) *
+	                        math::translate(-camera.position);
+	const math::mat4 projection = math::perspective(math::radians(camera.fov_deg), aspect,
+	                                                0.1f, 100.0f);
 
-	uniforms.mvp = projection * view * model;
+	uniforms.model = math::rotateY(rotation_angle);
+	uniforms.view_projection = projection * view;
+	uniforms.camera_position = camera.position;
+	uniforms.ambient_color = ambient_color;
+	uniforms.ambient_intensity = ambient_intensity;
+	uniforms.light_direction = safeDirection(light_direction);
+	uniforms.light_intensity = light_intensity;
+	uniforms.light_color = light_color;
+	uniforms.albedo = albedo;
+	uniforms.specular_color = specular_color;
+	uniforms.shininess = shininess;
 }
 
 void render(const graphics::internal::FrameData& fd) {

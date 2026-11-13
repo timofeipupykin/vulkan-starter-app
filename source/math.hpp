@@ -13,6 +13,54 @@ inline float radians(float degrees) {
 	return degrees * pi / 180.0f;
 }
 
+// 3D vector: three floats in a row, like GLSL vec3 (std140 aligns it to 16 bytes, size is 12)
+struct vec3 {
+	float x = 0.0f;
+	float y = 0.0f;
+	float z = 0.0f;
+};
+
+static_assert(sizeof(vec3) == 12);
+
+inline vec3 operator+(vec3 a, vec3 b) {
+	return {a.x + b.x, a.y + b.y, a.z + b.z};
+}
+
+inline vec3 operator-(vec3 a, vec3 b) {
+	return {a.x - b.x, a.y - b.y, a.z - b.z};
+}
+
+inline vec3 operator-(vec3 a) {
+	return {-a.x, -a.y, -a.z};
+}
+
+inline vec3 operator*(vec3 a, float s) {
+	return {a.x * s, a.y * s, a.z * s};
+}
+
+// |a| * |b| * cos(angle between a and b)
+inline float dot(vec3 a, vec3 b) {
+	return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+// Perpendicular to both a and b, direction by the right-hand rule
+inline vec3 cross(vec3 a, vec3 b) {
+	return {
+		a.y * b.z - a.z * b.y,
+		a.z * b.x - a.x * b.z,
+		a.x * b.y - a.y * b.x,
+	};
+}
+
+inline float length(vec3 v) {
+	return std::sqrt(dot(v, v));
+}
+
+// v must not be zero
+inline vec3 normalize(vec3 v) {
+	return v * (1.0f / length(v));
+}
+
 // 4x4 matrix stored column by column (column-major), like GLSL mat4
 class mat4 {
 public:
@@ -57,6 +105,10 @@ inline mat4 translate(float x, float y, float z) {
 	tmp(1, 3) = y;
 	tmp(2, 3) = z;
 	return tmp;
+}
+
+inline mat4 translate(vec3 v) {
+	return translate(v.x, v.y, v.z);
 }
 
 // Rotation around X axis, angle in radians

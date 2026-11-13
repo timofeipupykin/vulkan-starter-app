@@ -1,19 +1,19 @@
-# Лабораторная работа №2 «Камера и освещение» — план (оценка 4)
+# Лабораторная работа №2 «Камера и освещение» — план (минимум на оценку 3)
 
-**Цель: оценка 4 = базовое задание + дополнительные задания 1, 2, 3.** Задание 4 (визуализация источников) не делаем.
+**Цель: оценка 3 — только базовое задание, без дополнительных заданий.**
 
 > Источники: условие [Lab #2 Camera and Lighting.pdf](Lab%20%232%20Camera%20and%20Lighting.pdf), сообщение
 > преподавателя [read.txt](read.txt) (статья <https://learnopengl.com/Lighting/Light-casters>), код лабы 1
 > (ветка `lab1`, коммит `40bd0d7`), образец отчёта [lab1/3XX_Фамилия_ЛабX.docx](../lab1/3XX_Фамилия_ЛабX.docx).
 
-### Что проверено по коду лабы 1 (11.11)
+### Что проверено по коду лабы 1
 
 | Проверка | Результат |
 |----------|-----------|
 | Сборка на текущей машине (Fedora): системные заголовки Vulkan **1.4.350** в `/usr/include` | ✅ хватает пресета `debug`, `CMakeUserPresets.json` не нужен |
-| Кадров «в полёте» | **один** (одна fence `vk_fence_frame_in_flight` в [graphics_internal.cpp:733](../source/graphics_internal.cpp#L733)) → в `render()` после `prepare()` GPU ничего не читает, буферы и дескрипторы можно менять |
-| Формат swapchain | `use_default_format_selection()` у vk-bootstrap → **`B8G8R8A8_SRGB`**: шейдер пишет линейный цвет, гамма-коррекцию делает железо |
-| Что переиспользуем | `math::mat4`, `translate`, `rotateX/Y`, `perspective`, `radians` ([math.hpp](../source/math.hpp)); `createBuffer/uploadToBuffer/destroyBuffer/createShaderModule` ([graphics.cpp](../source/graphics.cpp)); pipeline и запись команд из [application.cpp](../source/application.cpp) |
+| Кадров «в полёте» | **один** (одна fence `vk_fence_frame_in_flight` в [graphics_internal.cpp:733](../source/graphics_internal.cpp#L733)) → копировать данные в UBO в `render()` безопасно, как в лабе 1 |
+| Формат swapchain | `use_default_format_selection()` у vk-bootstrap → **`B8G8R8A8_SRGB`** (проверено в исходниках vk-bootstrap): шейдер пишет линейный цвет, гамма-коррекцию делает железо |
+| Что переиспользуем | `math::mat4`, `translate`, `rotateX/Y`, `perspective`, `radians` ([math.hpp](../source/math.hpp)); `createBuffer/uploadToBuffer/destroyBuffer/createShaderModule` ([graphics.cpp](../source/graphics.cpp)); дескриптор, pipeline и запись команд из [application.cpp](../source/application.cpp) — меняются точечно |
 
 Код пишешь **сам**. Фрагменты ниже нужны, чтобы свериться, а не чтобы их копировать.
 
@@ -24,64 +24,60 @@
 0. [Оценка и сдача](#0-оценка-и-сдача)
 1. [Что нужно сделать](#1-что-нужно-сделать)
 2. [Что меняется относительно лабы 1](#2-что-меняется-относительно-лабы-1)
-3. [Теория: Блинн-Фонг и типы источников (по learnopengl)](#3-теория-блинн-фонг-и-типы-источников)
-4. [Раскладка данных для GPU (std140 / std430)](#4-раскладка-данных-для-gpu)
+3. [Теория: Блинн-Фонг и направленный источник](#3-теория-блинн-фонг-и-направленный-источник)
+4. [Раскладка UBO (std140)](#4-раскладка-ubo-std140)
 5. [Этап A — математика vec3](#5-этап-a--математика-vec3)
 6. [Этап B — свободная камера](#6-этап-b--свободная-камера)
 7. [Этап C — нормали, процедурная генерация](#7-этап-c--нормали-процедурная-генерация)
-8. [Этап D — два набора дескрипторов, пирамида + пол (доп. 1)](#8-этап-d--два-набора-дескрипторов-доп-1)
-9. [Этап E — Блинн-Фонг: направленный свет + ambient (база)](#9-этап-e--блинн-фонг-направленный-свет--ambient)
-10. [Этап F — точечные источники в storage-буфере (доп. 2)](#10-этап-f--точечные-источники-доп-2)
-11. [Этап G — прожекторы с мягкими краями (доп. 3) = оценка 4](#11-этап-g--прожекторы-доп-3--оценка-4)
-12. [Типичные ловушки](#12-типичные-ловушки)
-13. [README, отчёт, git](#13-readme-отчёт-git)
-14. [Подготовка к защите](#14-подготовка-к-защите)
+8. [Этап D — Блинн-Фонг: направленный свет, ambient, материал (= оценка 3)](#8-этап-d--блинн-фонг-направленный-свет-ambient-материал--оценка-3)
+9. [Типичные ловушки](#9-типичные-ловушки)
+10. [README, отчёт, git](#10-readme-отчёт-git)
+11. [Подготовка к защите](#11-подготовка-к-защите)
 
 ---
 
 ## 0. Оценка и сдача
 
-- **Оценка 4 = базовое задание + доп. задания 1–3** (PDF, раздел «Оценивание»).
-- **На оценку 4 нужно правильно ответить на ВСЕ 3–4 вопроса** (read.txt лабы 1). В лабе 1 для тройки хватало
-  одного ответа, здесь так не получится. Поэтому блоки **«Что нужно понимать»** после каждого этапа обязательны,
-  а §14 нужно выучить целиком.
-- Максимальная оценка снижается на балл каждые две недели после выдачи. Дату выдачи лабы 2 проверь в чате
-  преподавателя: если с неё прошло больше 4 недель, выше 3 уже не поставят.
+- **Оценка 3 = базовое задание без дополнительных** (PDF, раздел «Оценивание»).
+- На сдаче будет **3–4 случайных вопроса** по коду и математике. **Для 3 нужно правильно ответить хотя бы на один**
+  (read.txt лабы 1). Если не ответишь, придёшь в следующий день сдачи.
+- Максимальная оценка снижается каждые две недели, но **не ниже 3**, так что для тройки сроки не важны.
+- Преподаватель видит LLM-код и проверяет понимание. Поэтому после каждого этапа есть блок **«Что нужно понимать»**.
 - Vulkan + C++, ImGui. Подписи в ImGui только на английском: встроенный шрифт не содержит кириллицы.
 
 ---
 
 ## 1. Что нужно сделать
 
-### 1.1. Базовое задание (без него не будет и тройки)
+### 1.1. Базовое задание (из PDF)
 
-- Пирамида из лабы 1 рисуется **относительно камеры**. Камера управляется из ImGui: **позиция, поворот, угол обзора**.
-- У вершин есть **атрибут нормали**, нормали **генерируются процедурно**: считаются в коде, а не вписываются руками.
-- Один **направленный** источник и **ambient**. Освещение по **Блинн-Фонгу во фрагментном шейдере**.
-- Из UI меняются: параметры камеры, направление/цвет/интенсивность источника, ambient,
-  **материал** (альбедо, цвет блика, коэффициент блика).
+> «Для объекта из предыдущей лабораторной работы вашего варианта необходимо сделать только его отрисовку
+> относительно камеры с единственным направленным источником освещения. Все параметры камеры, источника освещения
+> и параметры материала по модели освещения Блинн-Фонга, а также рассеянный свет (ambient light) должны быть
+> изменяемыми из пользовательского интерфейса ImGUI.»
 
-### 1.2. Дополнительные задания 1–3
+Из этого и общих пунктов условия, которые относятся к базе:
 
-| № | Что | Где в плане |
-|---|-----|-------------|
-| 1 | Два набора дескрипторов: **set 0 = сцена** (UBO: view-projection, камера, ambient, направленный свет, счётчики; плюс storage-буферы источников), **set 1 = модель** (UBO: матрица модели и материал) | §8 |
-| 2 | Массив **точечных** источников в storage-буфере, затухание **1/d²**, в UI добавить/удалить/изменить | §10 |
-| 3 | Массив **прожекторов** в storage-буфере, 1/d², **мягкие края** (внутренний и внешний углы), в UI добавить/удалить/изменить | §11 |
+- пирамида из лабы 1 рисуется **относительно камеры**; камера управляется из ImGui: **позиция, поворот, угол обзора**;
+- у вершин есть **атрибут нормали**, нормали **генерируются процедурно** (считаются в коде, а не вписываются руками);
+- **один направленный источник** и **ambient**, освещение по **Блинн-Фонгу во фрагментном шейдере**;
+- из UI меняются: камера; направление, цвет и интенсивность источника; цвет и интенсивность ambient; **материал**
+  (альбедо, цвет блика, коэффициент блика).
 
-Общие требования к storage-буферам: в шейдере массив **без размера** (`PointLight point_lights[];`), поэтому
-максимальное число источников в шейдере не задано. На стороне C++ буфер растёт при добавлении источников.
+### 1.2. Чего НЕ делаем (это доп. задания 1–4)
 
-### 1.3. Решения по объёму (согласованы)
+В разделе «Условие» PDF есть пункты про затухание точечных и прожекторных источников, мягкие края прожектора и
+storage-буферы. Они относятся к **дополнительным заданиям 2–3**, к базе не относятся. Не делаем:
 
-- **Камера управляется только через ImGui**: позиция `DragFloat3`, yaw/pitch слайдерами, FOV. Без WASD и мыши,
-  `main.cpp` не трогаем.
-- **Сцена: вращающаяся пирамида + пол.** Пол нужен, чтобы были видны пятна прожекторов и затухание. Два объекта
-  показывают, зачем нужен отдельный set 1 на каждую модель.
-- Не делаем: доп. задание 4 (кубики и конусы на месте источников), текстуры, тени.
+- два набора дескрипторов (сцена / модель) — доп. 1;
+- точечные источники, прожекторы, затухание 1/d², storage-буферы — доп. 2, 3;
+- визуализацию источников — доп. 4;
+- пол, несколько объектов, WASD/мышь.
 
-Итог по объёму: 1 новый файл C++ (`mesh.hpp/.cpp`), 2 новых шейдера, заметно доработанный `application.cpp`.
-Примерно +450 строк своего кода.
+### 1.3. Объём
+
+Новых файлов нет, CMakeLists не меняется. Меняются `math.hpp` (+ `vec3`), `application.cpp` и шейдеры
+`pyramid.vert/frag`. Примерно +150 строк своего кода.
 
 ---
 
@@ -90,179 +86,132 @@
 | Было (лаба 1) | Станет (лаба 2) |
 |---------------|-----------------|
 | Камера: `translate(0,0,−distance)·rotateX(tilt)`, смотрит на центр | Свободная камера: позиция + yaw + pitch + FOV |
-| `Vertex {position, color}`, 5 вершин | `Vertex {position, normal}`, **16 вершин** у пирамиды (нормали граней), 4 у пола |
-| Один UBO `{mat4 mvp}`, один set | **set 0**: `SceneUniforms` (UBO) + 2 storage-буфера; **set 1**: `ModelUniforms` (UBO) у каждого объекта |
-| Один объект | Массив объектов `{mesh, позиция, вращение, материал, свой UBO, свой descriptor set}` |
-| `pyramid.vert/frag`: цвет вершины | `lit.vert/frag`: мировые позиция и нормаль, Блинн-Фонг по всем источникам |
-| UI: 5 слайдеров | UI: секции Camera / Scene / Directional light / Objects / Point lights / Spot lights |
+| `Vertex {position, color}`, 5 вершин | `Vertex {position, normal}`, **16 вершин** (у каждой грани свои вершины с нормалью грани) |
+| UBO `{mat4 mvp}` только для вершинного шейдера | UBO `Uniforms` (§4): `model`, `view_projection`, камера, свет, ambient, материал; виден **обоим** шейдерам |
+| Шейдеры: цвет вершины | Шейдеры: мировые позиция и нормаль, Блинн-Фонг во фрагментном |
+| UI в окне «Lab 1»: Background + 4 слайдера | UI: окно «Lab 2», Background и Rotation speed сверху, секции Camera / Ambient / Directional light / Material |
 
-### 2.1. Структура файлов
-
-```
-source/
-  math.hpp            ← + vec3, dot, cross, length, normalize
-  mesh.hpp / mesh.cpp ← НОВЫЙ: Vertex, MeshData, buildFlatMesh, makePyramid, makeFloor
-  graphics.hpp/.cpp   ← + writeBufferDescriptor (одна функция-помощник)
-  application.cpp     ← структуры для GPU, камера, объекты, источники, UI, дескрипторы, pipeline, рисование
-shaders/
-  lit.vert, lit.frag  ← вместо pyramid.vert/frag (их удалить: код лабы 1 остаётся в ветке lab1)
-```
-
-Правки [CMakeLists.txt](../CMakeLists.txt):
-
-```cmake
-# строка 9:
-add_executable(${PROJECT_NAME} source/main.cpp source/graphics_internal.cpp source/application.cpp
-               source/graphics.cpp source/mesh.cpp)
-
-# вместо compile_shader(pyramid.*):
-	compile_shader(lit.vert)
-	compile_shader(lit.frag)
-```
+Что остаётся как было: один descriptor set с одним UBO (binding 0), один pipeline, буферы через VMA, порядок
+`update()` → `render()`, `shutdown()`. Шейдеры можно не переименовывать: в CMakeLists уже стоят
+`compile_shader(pyramid.vert)` и `compile_shader(pyramid.frag)`, а рисуется по-прежнему пирамида.
 
 Сборка на этой машине (Fedora): `cmake --preset debug && cmake --build build-debug --parallel`, запуск из корня:
 `./build-debug/vulkan-starter-app`.
 
-### 2.2. Порядок данных в кадре (как в лабе 1, §3.4 п.2)
-
-- `update()`: UI, затем пересчёт **всех** данных на CPU (матрицы, массивы источников для GPU).
-- `render()`: после `prepare()` прошлый кадр на GPU уже закончен. Здесь (1) при необходимости увеличить
-  storage-буферы и обновить дескрипторы, (2) скопировать данные во все буферы, (3) записать команды.
-
 ---
 
-## 3. Теория: Блинн-Фонг и типы источников
+## 3. Теория: Блинн-Фонг и направленный источник
 
-Статья преподавателя: <https://learnopengl.com/Lighting/Light-casters>. Ниже то, что из неё берём, и **чем
-наша реализация от неё отличается**.
+Статья преподавателя: <https://learnopengl.com/Lighting/Light-casters>. Из неё для тройки нужен только
+**направленный источник** (Directional Light).
 
 ### 3.1. Обозначения (всё в **мировых** координатах)
 
+- `P` — точка поверхности (позиция фрагмента в мире).
 - `N` — нормаль поверхности (единичная).
-- `V = normalize(camera_position − P)` — от точки `P` к камере.
-- `L` — единичный вектор **от точки к источнику**.
-- `H = normalize(L + V)` — **halfway-вектор** (в этом и состоит отличие Блинн-Фонга от Фонга).
+- `V = normalize(camera_position − P)` — от точки к камере.
+- `L` — единичный вектор **от точки к источнику**. У направленного источника `L = −direction`, одинаковый для
+  всех точек (источник «бесконечно далеко», как Солнце). Поэтому у него нет позиции и затухания.
+- `H = normalize(L + V)` — **halfway-вектор**, в этом отличие Блинн-Фонга от Фонга.
 - Материал: `albedo` (диффузный цвет), `specular_color` (цвет блика), `shininess` (коэффициент блика, ≥ 1).
 
-### 3.2. Формула для одного источника
+### 3.2. Формула
 
 ```
+ambient  = ambient_color · ambient_intensity · albedo
 diffuse  = albedo · max(N·L, 0)
 specular = specular_color · max(N·H, 0)^shininess          (только если N·L > 0)
-вклад    = (diffuse + specular) · radiance
-radiance = color · intensity · attenuation · cone
-итог     = ambient_color · ambient_intensity · albedo  +  Σ вкладов всех источников
+итог     = ambient + (diffuse + specular) · light_color · light_intensity
 ```
 
-Фонг использует `R = reflect(−L, N)` и `(R·V)^n`. Блинн-Фонг заменяет это на `(N·H)^n`: так дешевле, и блик не
-обрывается резко, когда угол между `V` и `R` больше 90°.
+- **ambient** — рассеянный свет, приходит отовсюду. Без него теневая сторона была бы абсолютно чёрной.
+- **diffuse** (закон Ламберта) — `N·L = cos` угла падения. Свет, падающий перпендикулярно, даёт максимум, а свет
+  по касательной — ноль. От камеры не зависит.
+- **specular** — блик, зависит от положения камеры. Чем больше `shininess`, тем блик меньше и резче: косинус
+  меньше 1 в большой степени быстро падает к нулю.
+- Блик считаем только при `N·L > 0`: если свет падает с обратной стороны, блика быть не может.
 
-### 3.3. Типы источников
+**Фонг и Блинн-Фонг.** У Фонга `R = reflect(−L, N)` и `(R·V)^shininess`. Блинн-Фонг заменяет это на
+`(N·H)^shininess`: так дешевле, и блик не обрывается резко, когда угол между `V` и `R` больше 90°.
 
-| Тип | `L` | `attenuation` | `cone` |
-|-----|-----|---------------|--------|
-| Направленный | `−direction` (одинаковый для всех точек) | 1 | 1 |
-| Точечный | `normalize(position − P)` | **`1 / d²`**, `d = |position − P|` | 1 |
-| Прожектор | как у точечного | **`1 / d²`** | `clamp((cos θ − cos_outer) / (cos_inner − cos_outer), 0, 1)`, `cos θ = dot(−L, direction)` |
+### 3.3. Нормали
 
-**Отличие от learnopengl:** в статье затухание `1 / (Kc + Kl·d + Kq·d²)`. По условию нужен **закон обратных
-квадратов**, то есть `1/d²` (физически правильно: та же энергия распределяется по сфере площадью `4πd²`). При `d → 0`
-получается бесконечность, поэтому `d²` ограничиваем снизу: `max(d², 1e-4)`.
+- **Normal matrix.** В общем случае нормаль переводится в мир матрицей `transpose(inverse(mat3(model)))`, а не
+  матрицей модели: при неравномерном масштабе матрица модели «наклоняет» нормаль, и она перестаёт быть
+  перпендикулярной грани. У нас `model = rotateY(angle)`, то есть чистый поворот, а для поворота
+  `transpose(inverse(R)) = R`. Поэтому в шейдере достаточно `mat3(u.model) * in_normal`. На защите нужно
+  уметь объяснить, почему в нашем случае так можно.
+- **`normalize(v_normal)` во фрагментном шейдере** нужен в общем случае: если у вершин треугольника разные
+  единичные нормали, интерполяция короче 1 (середина между `(1,0,0)` и `(0,1,0)` — `(0.5, 0.5, 0)`, длина 0.707).
+  У нашей пирамиды у трёх вершин грани одна нормаль, поэтому после интерполяции она остаётся единичной.
+  Нормализацию всё равно оставляем, чтобы шейдер не зависел от модели. Так и отвечать на защите.
+- **Плоские грани.** Если у пирамиды 5 вершин, апекс общий для 4 граней, а у вершины может быть только одна
+  нормаль, поэтому грани сгладятся. Чтобы каждая грань освещалась как плоскость, у неё свои вершины с нормалью
+  этой грани: 4 боковые × 3 + основание 4 = **16 вершин**, 18 индексов.
 
-**Прожектор** (как в статье): углы задаются **от оси** конуса (половина раствора). В буфер передаём **косинусы**:
-сравнивать косинусы дешевле, чем считать `acos` в каждом фрагменте. Косинус убывает на [0°, 90°], поэтому «внутри
-конуса» означает `cos θ > cos_outer`. Если `outer == inner`, знаменатель равен 0, и в этом случае берём жёсткий край
-`step(cos_outer, cos θ)`. В UI `outer` не может быть меньше `inner`.
-
-### 3.4. Нормали и normal matrix
-
-- Нормаль переводится в мировые координаты **не матрицей модели**, а `transpose(inverse(mat3(model)))`. При
-  неравномерном масштабе матрица модели «наклоняет» нормаль, и она перестаёт быть перпендикулярной грани.
-- У нас `model = translate(position) · rotateY(angle)`, масштаба нет. Перенос на направления не действует, а для
-  поворота `R` выполняется `transpose(inverse(R)) = R`. Поэтому **normal matrix = `rotateY(angle)`**, и на CPU она
-  считается без обращения матрицы.
-- После интерполяции между вершинами длина нормали меньше 1, поэтому во фрагментном шейдере делаем `normalize(v_normal)`.
-
-### 3.5. Плоское (flat) освещение граней
-
-Если у пирамиды 5 вершин, апекс общий для 4 граней, и у него может быть только одна нормаль, то есть грани
-сгладятся. Чтобы грань освещалась как плоскость, **у каждой грани свои вершины** с нормалью этой грани:
-4 боковые × 3 + основание 4 = **16 вершин**, 18 индексов.
-
-### 3.6. sRGB
+### 3.4. sRGB
 
 Swapchain `B8G8R8A8_SRGB`: шейдер выдаёт **линейную** яркость, при записи железо применяет гамма-кривую. Поэтому
-ambient `0.05` на экране выглядит ярче, чем «5 % белого». Это нормально, исправлять не нужно, но на вопрос
-«почему так светло» нужно уметь ответить.
+ambient `0.1` на экране выглядит ярче, чем «10 % белого», а цвета из `ColorEdit3` на пирамиде светлее, чем
+квадратик в палитре ImGui. Это не ошибка, но на вопрос «почему так светло» нужно уметь ответить.
 
 ---
 
-## 4. Раскладка данных для GPU
+## 4. Раскладка UBO (std140)
 
-Калькулятор из read.txt лабы 1: <https://jackjamison.net/interactive/glsl-layout-calculator/>. UBO всегда
-**std140**, storage-буфер объявляем **std430**. Поля упорядочены так, что `vec3 + float/uint` занимает ровно 16
-байт и неявного выравнивания почти нет. Каждую структуру C++ проверяем `static_assert(sizeof)` и для пары полей
-`offsetof`.
+Один UBO, как в лабе 1, только полей больше. Калькулятор из read.txt лабы 1:
+<https://jackjamison.net/interactive/glsl-layout-calculator/>.
+
+Правило std140, которое здесь важно: **`vec3` выравнивается по 16 байтам**, но занимает 12. Поэтому после `vec3`
+можно положить один `float`, и вместе они займут ровно 16 байт. Если `float` нет, в C++ нужно вписать 4 байта
+выравнивания (`_pad`) руками: в GLSL компилятор добавит их сам, а C++ про std140 ничего не знает.
 
 ```cpp
-// set 0, binding 0 — uniform Scene (std140)
-struct SceneUniforms {
-	math::mat4 view_projection;        //   0
-	math::vec3 camera_position;        //  64
-	uint32_t   point_light_count;      //  76
-	math::vec3 ambient_color;          //  80
-	float      ambient_intensity;      //  92
-	math::vec3 dir_light_direction;    //  96  куда светит, единичный
-	float      dir_light_intensity;    // 108
-	math::vec3 dir_light_color;        // 112
-	uint32_t   spot_light_count;       // 124
-};                                     // 128
-static_assert(sizeof(SceneUniforms) == 128);
-static_assert(offsetof(SceneUniforms, ambient_color) == 80);
-
-// set 1, binding 0 — uniform Model (std140), у каждого объекта свой
-struct ModelUniforms {
-	math::mat4 model;                  //   0
-	math::mat4 normal_matrix;          //  64  mat4, а не mat3: в std140 mat3 = 3 столбца по 16 байт, легко ошибиться
-	math::vec3 albedo;                 // 128
-	float      shininess;              // 140
-	math::vec3 specular_color;         // 144
-	float      _pad;                   // 156  блок std140 округляется до 16 → 160
-};                                     // 160
-static_assert(sizeof(ModelUniforms) == 160);
-
-// set 0, binding 1 — элемент массива точечных источников (std430)
-struct PointLight {
-	math::vec3 position;               //  0
-	float      intensity;              // 12
-	math::vec3 color;                  // 16
-	float      _pad;                   // 28  выравнивание структуры = 16 (из-за vec3) → размер 32
-};
-static_assert(sizeof(PointLight) == 32);
-
-// set 0, binding 2 — элемент массива прожекторов (std430)
-struct SpotLight {
-	math::vec3 position;               //  0
-	float      intensity;              // 12
-	math::vec3 direction;              // 16  единичный, ось конуса
-	float      cos_inner;              // 28
-	math::vec3 color;                  // 32
-	float      cos_outer;              // 44
-};                                     // 48
-static_assert(sizeof(SpotLight) == 48);
+// Must match "uniform Uniforms" block in shaders/pyramid.vert and pyramid.frag (std140 layout)
+struct Uniforms {
+	math::mat4 model;             //   0
+	math::mat4 view_projection;   //  64
+	math::vec3 camera_position;   // 128
+	float _pad0;                  // 140  следующий vec3 должен начаться с 144
+	math::vec3 ambient_color;     // 144
+	float ambient_intensity;      // 156
+	math::vec3 light_direction;   // 160  куда светит, единичный
+	float light_intensity;        // 172
+	math::vec3 light_color;       // 176
+	float _pad1;                  // 188
+	math::vec3 albedo;            // 192
+	float _pad2;                  // 204
+	math::vec3 specular_color;    // 208
+	float shininess;              // 220
+};                                // 224
+static_assert(sizeof(Uniforms) == 224);
+static_assert(offsetof(Uniforms, ambient_color) == 144);
+static_assert(offsetof(Uniforms, albedo) == 192);
 ```
 
-GLSL-объявления те же (в GLSL поля `_pad` не пишем: компилятор сам добавляет выравнивание, а в C++ его нужно
-вписать руками, как и говорил преподаватель).
+GLSL (в обоих шейдерах одинаково, поля `_pad` не пишем):
 
-**Почему счётчики источников передаются в UBO, а не через `point_lights.length()`:** буфер выделен «с запасом»
-(capacity ≥ count), и `.length()` вернул бы ёмкость, а не число живых источников.
+```glsl
+layout(set = 0, binding = 0) uniform Uniforms {
+	mat4 model;
+	mat4 view_projection;
+	vec3 camera_position;
+	vec3 ambient_color;   float ambient_intensity;
+	vec3 light_direction; float light_intensity;
+	vec3 light_color;
+	vec3 albedo;
+	vec3 specular_color;  float shininess;
+} u;
+```
+
+Зачем `model` и `view_projection` отдельно, а не одна `mvp`, как в лабе 1: свет считается в мировых координатах,
+поэтому шейдеру нужна мировая позиция точки (`model · position`), а уже потом `view_projection` для экрана.
 
 ---
 
 ## 5. Этап A — математика vec3
 
-В [math.hpp](../source/math.hpp) дописать (стиль тот же, что у `mat4`):
+В [math.hpp](../source/math.hpp) дописать в стиле `mat4`:
 
 ```cpp
 struct vec3 {
@@ -270,15 +219,20 @@ struct vec3 {
 };
 static_assert(sizeof(vec3) == 12);       // три float подряд, иначе раскладка §4 съедет
 
-vec3 operator+(vec3 a, vec3 b);  vec3 operator-(vec3 a, vec3 b);
-vec3 operator-(vec3 a);          vec3 operator*(vec3 a, float s);
-float dot(vec3 a, vec3 b);       // ax·bx + ay·by + az·bz
-vec3  cross(vec3 a, vec3 b);     // (ay·bz − az·by,  az·bx − ax·bz,  ax·by − ay·bx)
-float length(vec3 v);            // sqrt(dot(v, v))
-vec3  normalize(vec3 v);         // v * (1 / length(v)); нулевой вектор сюда не передавать (§9.4)
+// ВСЕ функции — inline, с телом прямо в заголовке (как translate/rotateX/... в лабе 1)
+inline vec3 operator+(vec3 a, vec3 b);  inline vec3 operator-(vec3 a, vec3 b);
+inline vec3 operator-(vec3 a);          inline vec3 operator*(vec3 a, float s);
+inline float dot(vec3 a, vec3 b);       // ax·bx + ay·by + az·bz
+inline vec3  cross(vec3 a, vec3 b);     // (ay·bz − az·by,  az·bx − ax·bz,  ax·by − ay·bx)
+inline float length(vec3 v);            // sqrt(dot(v, v))
+inline vec3  normalize(vec3 v);         // v * (1 / length(v)); нулевой вектор сюда не передавать (§8.4)
+inline mat4  translate(vec3 v);         // translate(v.x, v.y, v.z) — для камеры
 ```
 
-Перегрузка `translate(vec3)` удобна, но не обязательна.
+**Почему `inline`.** `#pragma once` защищает от двойного включения заголовка **в один** `.cpp`. Если в будущем
+`math.hpp` подключат два `.cpp`, функция без `inline` окажется в обоих объектных файлах, и компоновщик выдаст
+`multiple definition`. `inline` разрешает одинаковые определения в разных единицах трансляции. Сейчас `math.hpp`
+подключён только в `application.cpp`, но правило лучше соблюдать сразу, как в лабе 1.
 
 **Проверка** (временно в `initialize()`, потом удалить):
 - `cross({1,0,0}, {0,1,0}) = (0,0,1)`;
@@ -286,7 +240,7 @@ vec3  normalize(vec3 v);         // v * (1 / length(v)); нулевой вект
 
 ✅ **Чекпоинт A:** числа совпадают. `git commit -m "Lab2: vec3 math"`.
 
-**Что нужно понимать:** скалярное произведение = `|a||b|cos α` (отсюда `N·L` = косинус угла падения);
+**Что нужно понимать:** скалярное произведение = `|a||b|cos α`, отсюда `N·L` — косинус угла падения;
 векторное произведение перпендикулярно обоим векторам, направление по правилу правой руки, поэтому знак нормали
 зависит от порядка обхода.
 
@@ -300,39 +254,47 @@ vec3  normalize(vec3 v);         // v * (1 / length(v)); нулевой вект
 struct Camera {
 	math::vec3 position = {0.0f, 2.0f, 6.0f};
 	float yaw_deg = 0.0f;       // поворот вокруг Y; 0 → смотрит вдоль −Z; > 0 → влево
-	float pitch_deg = -18.0f;   // наклон вверх/вниз, [−89, 89]
+	float pitch_deg = -18.0f;   // наклон: > 0 вверх, < 0 вниз; [−89, 89]
 	float fov_deg = 60.0f;
 };
 ```
 
+Из `(0, 2, 6)` с наклоном −18° камера смотрит в центр пирамиды (`atan(2/6) ≈ 18.4°`).
+
 ### 6.2. Матрица вида = обратная к трансформации камеры
 
-Камера в мире = `translate(p) · rotateY(yaw) · rotateX(pitch)`. Вид — обратная матрица (обратная к произведению =
-произведение обратных в обратном порядке, обратная к повороту = поворот на −угол):
+Камера в мире = `translate(p) · rotateY(yaw) · rotateX(pitch)`. Вид — обратная матрица: обратная к произведению
+равна произведению обратных в обратном порядке, а обратная к повороту — поворот на −угол.
 
 ```
 view = rotateX(−pitch) · rotateY(−yaw) · translate(−p)
 view_projection = perspective(fov, aspect, 0.1, 100) · view
 ```
 
-Направление взгляда (пригодится для проверки): `forward = (−sin yaw · cos pitch,  sin pitch,  −cos yaw · cos pitch)`.
+Направление взгляда (для проверки): `forward = (−sin yaw · cos pitch,  sin pitch,  −cos yaw · cos pitch)`.
 
 **Проверка:** `view · (p, 1) = (0, 0, 0, 1)`; `view · (p + forward, 1) = (0, 0, −1, 1)`.
 
-### 6.3. UI (секция `Camera`)
+### 6.3. UI
 
 ```cpp
-ImGui::DragFloat3("Position", &camera.position.x, 0.05f);
-ImGui::SliderFloat("Yaw", &camera.yaw_deg, -180.0f, 180.0f);
-ImGui::SliderFloat("Pitch", &camera.pitch_deg, -89.0f, 89.0f);
-ImGui::SliderFloat("FOV", &camera.fov_deg, 20.0f, 120.0f);
+ImGui::Begin("Lab 2");
+if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+	ImGui::DragFloat3("Position", &camera.position.x, 0.05f);
+	ImGui::SliderFloat("Yaw", &camera.yaw_deg, -180.0f, 180.0f);
+	ImGui::SliderFloat("Pitch", &camera.pitch_deg, -89.0f, 89.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat("FOV", &camera.fov_deg, 20.0f, 120.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+}
 ```
 
-На этом этапе всё остальное как в лабе 1: в `uniforms.mvp = view_projection · model` подставляется новая камера.
-Слайдеры Distance и Tilt убрать.
+`ImGuiSliderFlags_AlwaysClamp` нужен, потому что Ctrl+клик по слайдеру позволяет ввести число вне диапазона.
 
-✅ **Чекпоинт B:** камеру можно сдвинуть и повернуть, пирамида остаётся на месте мира, при повороте
-yaw > 0 сцена уходит вправо. `git commit -m "Lab2: free camera"`.
+На этом этапе шейдеры и UBO ещё из лабы 1: `uniforms.mvp = view_projection · rotateY(angle)`. Слайдеры
+Distance и Tilt убрать. Background и Rotation speed оставить как есть, над секциями: это параметры сцены, а не
+камеры и не материала.
+
+✅ **Чекпоинт B:** камеру можно сдвинуть и повернуть, пирамида остаётся на месте; при yaw > 0 сцена уходит вправо.
+`git commit -m "Lab2: free camera"`.
 
 **Что нужно понимать:** почему view — это обратная матрица (двигаем не камеру, а весь мир в противоположную
 сторону); почему порядок `rotateX · rotateY · translate`, а не наоборот; зачем ограничивать pitch ±89° (на ±90°
@@ -342,544 +304,256 @@ yaw > 0 сцена уходит вправо. `git commit -m "Lab2: free camera"
 
 ## 7. Этап C — нормали, процедурная генерация
 
-### 7.1. Новый формат вершины (`mesh.hpp`)
+### 7.1. Новый формат вершины
 
 ```cpp
 struct Vertex {
 	math::vec3 position;
 	math::vec3 normal;
 };
-
-struct MeshData {
-	std::vector<Vertex> vertices;
-	std::vector<uint32_t> indices;
-};
-
-// faces: каждая грань — выпуклый многоугольник из индексов углов, обход против часовой стрелки снаружи
-MeshData buildFlatMesh(std::span<const math::vec3> corners,
-                       std::span<const std::vector<uint32_t>> faces);
-MeshData makePyramid();          // 16 вершин, 18 индексов
-MeshData makeFloor(float half);  // 4 вершины, 6 индексов
 ```
 
-Атрибуты в pipeline: `location 0` — `position`, `location 1` — `normal`, оба `VK_FORMAT_R32G32B32_SFLOAT`,
-`offsetof(Vertex, …)`.
+Атрибуты в pipeline: `location 0` — `position`, `location 1` — `normal` (вместо `color`), оба
+`VK_FORMAT_R32G32B32_SFLOAT`, `offsetof(Vertex, …)`.
+
+Массивы `pyramid_vertices` / `pyramid_indices` из лабы 1 заменяются на `std::vector<Vertex>` и
+`std::vector<uint32_t>` (нужен `#include <vector>`). Их можно сделать **локальными** в `initialize()`:
+`createBuffer` сразу копирует данные в буфер (`uploadToBuffer` внутри), и после этого векторы больше не нужны.
+
+- В `createBuffer` передаётся `vertices.size() * sizeof(Vertex)` и `vertices.data()` (то же для индексов).
+- `constexpr uint32_t pyramid_index_count = sizeof(...) / sizeof(...)` из лабы 1 больше не компилируется: размер
+  вектора известен только во время работы. Заменить на обычную глобальную переменную
+  `uint32_t pyramid_index_count = 0;` и в `initialize()` записать в неё `uint32_t(indices.size())`.
+  `vkCmdDrawIndexed` в `render()` по-прежнему использует `pyramid_index_count`.
 
 ### 7.2. Генерация нормалей (это и есть «процедурно»)
 
+Углы и грани — те же, что в лабе 1. Для каждой грани: нормаль = нормированное векторное произведение двух рёбер,
+вершины грани копируются с этой нормалью, многоугольник режется на треугольники веером.
+
 ```cpp
-MeshData buildFlatMesh(std::span<const math::vec3> corners, std::span<const std::vector<uint32_t>> faces) {
-	MeshData mesh;
-	for (const auto& face : faces) {
+// Each face is a convex polygon of corner indices, counter-clockwise when looking from outside.
+// Every face gets its own vertices with the face normal, so faces are lit flat.
+void buildPyramid(std::vector<Vertex>& vertices, std::vector<uint32_t>& indices) {
+	const math::vec3 corners[] = {
+		{-1.0f, -0.75f, -1.0f}, {1.0f, -0.75f, -1.0f}, {1.0f, -0.75f, 1.0f}, {-1.0f, -0.75f, 1.0f}, // base
+		{ 0.0f,  0.75f,  0.0f},                                                                      // apex
+	};
+	const std::vector<uint32_t> faces[] = {
+		{0, 4, 1}, {1, 4, 2}, {2, 4, 3}, {3, 4, 0},   // sides
+		{0, 1, 2, 3},                                 // base, looks down
+	};
+
+	for (const std::vector<uint32_t>& face : faces) {
 		const math::vec3 a = corners[face[0]], b = corners[face[1]], c = corners[face[2]];
 		const math::vec3 normal = math::normalize(math::cross(b - a, c - a));   // CCW снаружи → наружу
 
-		const uint32_t first = uint32_t(mesh.vertices.size());
+		const uint32_t first = uint32_t(vertices.size());
 		for (uint32_t corner : face) {
-			mesh.vertices.push_back({corners[corner], normal});
+			vertices.push_back({corners[corner], normal});
 		}
-		for (uint32_t i = 1; i + 1 < face.size(); ++i) {                         // веер: (0,1,2), (0,2,3)...
-			mesh.indices.insert(mesh.indices.end(), {first, first + i, first + i + 1});
+		for (uint32_t i = 1; i + 1 < face.size(); ++i) {                        // веер: (0,1,2), (0,2,3)
+			indices.insert(indices.end(), {first, first + i, first + i + 1});
 		}
 	}
-	return mesh;
 }
 ```
 
-**Пирамида** — углы и грани из лабы 1:
-
-```
-corners: B0(−1,−0.75,−1)  B1(1,−0.75,−1)  B2(1,−0.75,1)  B3(−1,−0.75,1)  A(0,0.75,0)
-faces:   {0,4,1} {1,4,2} {2,4,3} {3,4,0}  {0,1,2,3}
-```
+Итог: 4 × 3 + 4 = **16 вершин**, 4 × 3 + 2 × 3 = **18 индексов** (как в лабе 1).
 
 Проверка вручную (готовый ответ на защите): грань `{0,4,1}`:
 `(A − B0) × (B1 − B0) = (1, 1.5, 1) × (2, 0, 0) = (0, 2, −3)` → `/√13` → `(0, 0.555, −0.832)`, наружу и вверх ✓.
-Основание `{0,1,2,…}`: `(2,0,0) × (2,0,2) = (0, −4, 0)` → `(0, −1, 0)`, вниз ✓.
+Основание `{0,1,2,3}`: `(2,0,0) × (2,0,2) = (0, −4, 0)` → `(0, −1, 0)`, вниз ✓.
 
-**Пол** — квадрат в плоскости `y = 0`, обход CCW, если смотреть сверху:
-`(−h,0,−h) (−h,0,h) (h,0,h) (h,0,−h)`, грань `{0,1,2,3}`. Проверка:
-`(0,0,2h) × (2h,0,2h) = (0, 4h², 0)` → вверх ✓. `h = 10`.
+### 7.3. Временная отладка
 
-### 7.3. Mesh на GPU
+Вершинный шейдер передаёт нормаль дальше (`layout(location = 1) in vec3 in_normal` → `out vec3 v_normal`),
+фрагментный выводит `out_color = vec4(normalize(v_normal) * 0.5 + 0.5, 1.0)`. UBO пока прежний (`mvp`).
 
-```cpp
-struct Mesh {
-	graphics::Buffer vertex_buffer;
-	graphics::Buffer index_buffer;
-	uint32_t index_count = 0;
-};
-Mesh createMesh(const MeshData& data);   // два graphics::createBuffer(...), как в лабе 1
-void destroyMesh(Mesh& mesh);
-```
+✅ **Чекпоинт C:** каждая грань залита **одним** цветом, у граней разные цвета. Основание смотрит вниз, поэтому с
+камерой по умолчанию его не видно. Чтобы проверить его цвет `(0.5, 0, 0.5)` (фиолетовый), опусти камеру ниже
+основания: Position `y = −2`, Pitch `+20°`. `git commit -m "Lab2: procedural flat normals"`.
 
-### 7.4. Временная отладка
-
-`lit.vert` передаёт нормаль дальше, `lit.frag` выводит `out_color = vec4(normalize(v_normal) * 0.5 + 0.5, 1.0)`.
-Пока пол не нужен: рисуем только пирамиду со старым `mvp`.
-
-✅ **Чекпоинт C:** каждая грань пирамиды залита **одним** цветом, и цвета у граней разные (у основания
-`(0.5, 0, 0.5)`, фиолетовый). `git commit -m "Lab2: procedural flat normals"`.
-
-**Что нужно понимать:** зачем 16 вершин вместо 5 (§3.5); почему векторное произведение даёт нормаль наружу
+**Что нужно понимать:** зачем 16 вершин вместо 5 (§3.3); почему векторное произведение даёт нормаль наружу
 только при правильном обходе; что такое атрибут вершины и `location`.
 
 ---
 
-## 8. Этап D — два набора дескрипторов (доп. 1)
+## 8. Этап D — Блинн-Фонг: направленный свет, ambient, материал (= оценка 3)
 
-### 8.1. Объекты сцены
+### 8.1. UBO и дескриптор
 
-```cpp
-struct Material {
-	math::vec3 albedo;
-	math::vec3 specular_color;
-	float shininess;
-};
+- Структура `Uniforms` из §4 вместо `{ mat4 mvp }`. Старый `static_assert(sizeof(Uniforms) == 64)` из лабы 1
+  заменить на проверки из §4, иначе сборка упадёт. Строку `uniforms.mvp = ...` в `update()` убрать.
+- В `createDescriptorSet()` поменять одну вещь: `stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT`.
+  UBO теперь читает и фрагментный шейдер, без этого будет ошибка валидации при создании pipeline.
+- Размер буфера и `range` уже записаны как `sizeof(Uniforms)` в коде лабы 1, они подстроятся сами.
 
-struct Object {
-	const char* name;
-	Mesh* mesh;
-	math::vec3 position;
-	float rotation_speed;              // рад/с вокруг Y
-	float angle = 0.0f;
-	Material material;
-	graphics::Buffer uniform_buffer;   // ModelUniforms
-	VkDescriptorSet descriptor_set;    // set 1 этого объекта
-	ModelUniforms uniforms;
-};
+### 8.2. Шейдеры
 
-Mesh pyramid_mesh, floor_mesh;
-Object objects[] = {
-	{.name = "Pyramid", .mesh = &pyramid_mesh, .position = {0, 0.75f, 0}, .rotation_speed = 0.5f,
-	 .material = {{0.8f, 0.3f, 0.2f}, {0.5f, 0.5f, 0.5f}, 64.0f}},
-	{.name = "Floor", .mesh = &floor_mesh, .position = {0, 0, 0}, .rotation_speed = 0.0f,
-	 .material = {{0.6f, 0.6f, 0.6f}, {0.2f, 0.2f, 0.2f}, 16.0f}},
-};
-```
-
-Пирамида поднята на 0.75, поэтому основание лежит на полу (`y = 0`). Z-fighting не будет: снизу пол отсекается
-(он смотрит вверх), а сверху отсекается основание (оно смотрит вниз).
-
-### 8.2. Объекты Vulkan (в `initialize()`, по порядку)
-
-| Объект | Содержимое |
-|--------|-----------|
-| `scene_set_layout` | binding 0: `UNIFORM_BUFFER`, `VERTEX \| FRAGMENT`. **На этапе F** добавится binding 1, **на этапе G** — binding 2 (`STORAGE_BUFFER`, `FRAGMENT`) |
-| `model_set_layout` | binding 0: `UNIFORM_BUFFER`, `VERTEX \| FRAGMENT` |
-| `pipeline_layout` | `setLayoutCount = 2`, `pSetLayouts = {scene_set_layout, model_set_layout}`. **Порядок = номер set** |
-| `descriptor_pool` | `maxSets = 1 + objects`, pool sizes: `UNIFORM_BUFFER × (1 + objects)`, позже `STORAGE_BUFFER × 2` |
-| `scene_uniform_buffer` | `createBuffer(sizeof(SceneUniforms), UNIFORM_BUFFER_BIT, nullptr)` |
-| `scene_descriptor_set` | `vkAllocateDescriptorSets` с `scene_set_layout` |
-| для каждого объекта | `uniform_buffer` + `descriptor_set` с `model_set_layout` |
-
-Связывание буфера и binding повторяется 3–5 раз, поэтому выносим в [graphics.cpp](../source/graphics.cpp):
-
-```cpp
-// Points binding of the set to the whole buffer
-void writeBufferDescriptor(VkDescriptorSet set, uint32_t binding, VkDescriptorType type, VkBuffer buffer) {
-	const VkDescriptorBufferInfo info = {.buffer = buffer, .offset = 0, .range = VK_WHOLE_SIZE};
-	const VkWriteDescriptorSet write = {
-		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		.dstSet = set,
-		.dstBinding = binding,
-		.descriptorCount = 1,
-		.descriptorType = type,
-		.pBufferInfo = &info,
-	};
-	vkUpdateDescriptorSets(internal::context.device, 1, &write, 0, nullptr);
-}
-```
-
-### 8.3. Шейдеры (каркас)
+`pyramid.vert`:
 
 ```glsl
-// lit.vert и lit.frag — одинаковые объявления блоков
-layout(set = 0, binding = 0) uniform Scene {
-	mat4 view_projection;
-	vec3 camera_position;     uint  point_light_count;
-	vec3 ambient_color;       float ambient_intensity;
-	vec3 dir_light_direction; float dir_light_intensity;
-	vec3 dir_light_color;     uint  spot_light_count;
-} scene;
-
-layout(set = 1, binding = 0) uniform Model {
-	mat4 model;
-	mat4 normal_matrix;
-	vec3 albedo;          float shininess;
-	vec3 specular_color;
-} object;
-```
-
-`lit.vert`:
-
-```glsl
+#version 450
+/* блок Uniforms из §4 */
 layout(location = 0) in vec3 in_position;
 layout(location = 1) in vec3 in_normal;
 layout(location = 0) out vec3 v_world_position;
 layout(location = 1) out vec3 v_normal;
 
 void main() {
-	vec4 world = object.model * vec4(in_position, 1.0);
-	gl_Position = scene.view_projection * world;
+	vec4 world = u.model * vec4(in_position, 1.0);
+	gl_Position = u.view_projection * world;
 	v_world_position = world.xyz;
-	v_normal = mat3(object.normal_matrix) * in_normal;
+	// model is a pure rotation, so transpose(inverse(model)) == model (§3.3)
+	v_normal = mat3(u.model) * in_normal;
 }
 ```
 
-Временный `lit.frag`: `out_color = vec4(object.albedo * (0.5 + 0.5 * normalize(v_normal).y), 1.0);`. Так видно,
-что материал приходит из set 1.
-
-### 8.4. `update()` и `render()`
-
-```cpp
-// update(): для каждого объекта
-object.angle += delta_time * object.rotation_speed;
-const math::mat4 rotation = math::rotateY(object.angle);
-object.uniforms.model = math::translate(object.position.x, object.position.y, object.position.z) * rotation;
-object.uniforms.normal_matrix = rotation;                 // §3.4
-object.uniforms.albedo = object.material.albedo;  /* ... specular_color, shininess ... */
-
-// render(): копирование (после prepare())
-graphics::uploadToBuffer(scene_uniform_buffer, &scene_uniforms, sizeof scene_uniforms);
-for (const Object& object : objects) graphics::uploadToBuffer(object.uniform_buffer, &object.uniforms, sizeof object.uniforms);
-
-// render(): рисование
-vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout,
-                        0, 1, &scene_descriptor_set, 0, nullptr);          // set 0 — один раз за кадр
-for (const Object& object : objects) {
-	vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout,
-	                        1, 1, &object.descriptor_set, 0, nullptr);     // firstSet = 1 — set 0 не трогается
-	vkCmdBindVertexBuffers(cb, 0, 1, &object.mesh->vertex_buffer.buffer, &offset);
-	vkCmdBindIndexBuffer(cb, object.mesh->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-	vkCmdDrawIndexed(cb, object.mesh->index_count, 1, 0, 0, 0);
-}
-```
-
-### 8.5. UI (секция `Objects`)
-
-Для каждого объекта: `ImGui::PushID(i)`, `TreeNode(object.name)`, внутри `DragFloat3 Position`,
-`SliderFloat Rotation speed`, `ColorEdit3 Albedo`, `ColorEdit3 Specular`,
-`SliderFloat Shininess` в диапазоне 1…256 с `ImGuiSliderFlags_Logarithmic`. Затем `TreePop`, `PopID`.
-
-### 8.6. `shutdown()` (финальный список с учётом этапов F, G)
-
-```
-vkQueueWaitIdle
-vkDestroyPipeline, vkDestroyPipelineLayout
-vkDestroyDescriptorPool                      ← освобождает все наборы
-vkDestroyDescriptorSetLayout × 2
-destroyBuffer: scene_uniform_buffer, point_light_buffer, spot_light_buffer, uniform_buffer каждого объекта
-destroyMesh: pyramid_mesh, floor_mesh
-```
-
-✅ **Чекпоинт D:** пирамида стоит на сером полу и вращается, цвет каждого объекта меняется из его секции UI
-независимо от другого. Нет `Validation Error`. `git commit -m "Lab2: scene and model descriptor sets"`.
-
-**Что нужно понимать:** set и binding; почему данные разделены по частоте обновления (set 0 — раз за кадр,
-set 1 — на каждый объект); почему при `firstSet = 1` set 0 остаётся привязанным (совместимость pipeline layout);
-как считаются размеры пула; почему UBO и descriptor set у каждого объекта свой (а не один, перезаписываемый между
-draw-вызовами: команды выполняются позже, чем записываются, и GPU увидел бы только последнее значение).
-
----
-
-## 9. Этап E — Блинн-Фонг: направленный свет + ambient
-
-### 9.1. `lit.frag`
+`pyramid.frag`:
 
 ```glsl
 #version 450
-/* ... блоки Scene и Model, §8.3 ... */
+/* блок Uniforms из §4 */
 layout(location = 0) in vec3 v_world_position;
 layout(location = 1) in vec3 v_normal;
 layout(location = 0) out vec4 out_color;
 
-// L — к источнику, radiance — цвет · интенсивность · затухание
-vec3 blinnPhong(vec3 N, vec3 V, vec3 L, vec3 radiance) {
-	float n_dot_l = max(dot(N, L), 0.0);
-	if (n_dot_l == 0.0) {
-		return vec3(0.0);                 // источник за поверхностью — ни диффузного, ни блика
-	}
-	vec3 H = normalize(L + V);
-	float specular = pow(max(dot(N, H), 0.0), object.shininess);
-	return (object.albedo * n_dot_l + object.specular_color * specular) * radiance;
-}
-
 void main() {
 	vec3 N = normalize(v_normal);
-	vec3 V = normalize(scene.camera_position - v_world_position);
+	vec3 V = normalize(u.camera_position - v_world_position);
+	vec3 L = -u.light_direction;                 // к источнику
 
-	vec3 color = scene.ambient_color * scene.ambient_intensity * object.albedo;
-	color += blinnPhong(N, V, -scene.dir_light_direction,
-	                    scene.dir_light_color * scene.dir_light_intensity);
-	/* этапы F и G — циклы по источникам */
+	vec3 color = u.ambient_color * u.ambient_intensity * u.albedo;
+
+	float n_dot_l = max(dot(N, L), 0.0);
+	if (n_dot_l > 0.0) {                         // свет падает с лицевой стороны
+		vec3 H = normalize(L + V);
+		float specular = pow(max(dot(N, H), 0.0), u.shininess);
+		color += (u.albedo * n_dot_l + u.specular_color * specular) * u.light_color * u.light_intensity;
+	}
+
 	out_color = vec4(color, 1.0);
 }
 ```
 
-### 9.2. Значения по умолчанию
+### 8.3. Параметры и UI
 
-| Параметр | Значение |
-|----------|----------|
-| Ambient | цвет `(1, 1, 1)`, интенсивность `0.05` |
-| Directional | направление `(−0.4, −1, −0.3)` (нормализовать), цвет `(1, 0.95, 0.9)`, интенсивность `0.4` |
+```cpp
+namespace {
+Camera camera;
+math::vec3 ambient_color = {1.0f, 1.0f, 1.0f};
+float ambient_intensity = 0.1f;
+math::vec3 light_direction = {-0.4f, -1.0f, -0.3f};     // нормализуется в update()
+math::vec3 light_color = {1.0f, 0.95f, 0.9f};
+float light_intensity = 1.0f;
+math::vec3 albedo = {0.8f, 0.3f, 0.2f};
+math::vec3 specular_color = {0.5f, 0.5f, 0.5f};
+float shininess = 64.0f;
+float rotation_speed = 0.5f;
+}
+```
 
-### 9.3. UI
+| Секция | Элементы |
+|--------|----------|
+| `Camera` | §6.3 |
+| `Ambient` | `ColorEdit3 Color`, `SliderFloat Intensity 0…1` |
+| `Directional light` | `DragFloat3 Direction` (шаг 0.02), `ColorEdit3 Color`, `SliderFloat Intensity 0…5` |
+| `Material` | `ColorEdit3 Albedo`, `ColorEdit3 Specular`, `SliderFloat Shininess 1…256` с `ImGuiSliderFlags_Logarithmic \| ImGuiSliderFlags_AlwaysClamp` |
+| (без секции, сверху) | `ColorEdit3 Background`, `SliderFloat Rotation speed` — как в лабе 1 |
 
-Секция `Scene`: `ColorEdit3 Background`, `ColorEdit3 Ambient color`, `SliderFloat Ambient intensity 0…1`.
-Секция `Directional light`: `DragFloat3 Direction`, `ColorEdit3 Color`, `SliderFloat Intensity 0…5`.
+Одинаковые подписи («Color», «Intensity») в разных секциях — это один и тот же ID в ImGui, и виджеты будут
+мешать друг другу. Секции оборачивать в `ImGui::PushID("ambient")` / `ImGui::PopID()` или давать разные подписи
+(`"Ambient color"`, `"Light color"`).
 
-### 9.4. Нормализация направлений в `update()`
+Shininess не меньше 1: при 0 получается `pow(0, 0)`, а это неопределённое значение.
 
-Направления задаются через `DragFloat3`, поэтому пользователь может сделать вектор нулевым. Тогда `normalize`
-даст NaN, и всё станет чёрным. Правило: если `length(d) < 1e-4`, подставить `(0, −1, 0)`, иначе `normalize(d)`.
-Это же правило используем для прожекторов в §11.
+Значения по умолчанию дают разную освещённость граней: `L = normalize(0.4, 1, 0.3) ≈ (0.36, 0.89, 0.27)`, и при
+нулевом повороте `N·L` у боковых граней от 0.2 (грань −X) до 0.79 (грань +X). Основание смотрит вниз и освещено
+только ambient.
 
-✅ **Чекпоинт E (= базовое задание):** у граней пирамиды разная яркость, на пирамиде виден блик, и он сдвигается
-при движении камеры. Shininess меняет размер блика, ambient подсвечивает тень. `git commit -m "Lab2: Blinn-Phong directional light"`.
+### 8.4. `update()` и `render()`
 
-**Что нужно понимать:** каждое слагаемое §3.2 и его физический смысл; зачем `V` и, следовательно,
-`camera_position`; почему блик зависит от положения камеры, а диффузная составляющая нет; почему всё считается в
-мировых координатах; почему свет считаем во фрагментном шейдере, а не в вершинном (у пола всего 4 вершины,
-и пятно прожектора между ними потерялось бы).
+Направление задаётся через `DragFloat3`, его можно сделать нулевым, и тогда `normalize` даст NaN (всё станет
+чёрным). Поэтому:
+
+```cpp
+// Direction from the UI may be zero: fall back to "straight down" instead of NaN
+math::vec3 safeDirection(math::vec3 d) {
+	return math::length(d) < 1e-4f ? math::vec3{0.0f, -1.0f, 0.0f} : math::normalize(d);
+}
+
+// update(), после UI:
+rotation_angle += delta_time * rotation_speed;
+uniforms.model = math::rotateY(rotation_angle);
+uniforms.view_projection = projection * view;            // §6.2
+uniforms.camera_position = camera.position;
+uniforms.ambient_color = ambient_color;
+uniforms.ambient_intensity = ambient_intensity;
+uniforms.light_direction = safeDirection(light_direction);
+uniforms.light_intensity = light_intensity;
+uniforms.light_color = light_color;
+uniforms.albedo = albedo;
+uniforms.specular_color = specular_color;
+uniforms.shininess = shininess;
+```
+
+`render()` не меняется: `uploadToBuffer(uniform_buffer, &uniforms, sizeof(uniforms))` до записи команд, затем
+то же рисование, что в лабе 1. `shutdown()` тоже не меняется: новых объектов Vulkan нет.
+
+✅ **Чекпоинт D = оценка 3:**
+- грани пирамиды освещены по-разному, рёбра чёткие;
+- на гранях, повёрнутых к свету, виден блик, и он сдвигается при движении камеры; диффузная часть при этом не
+  меняется;
+- `Shininess` меняет размер блика, `Ambient` подсвечивает теневые грани и основание;
+- направление, цвет и интенсивность света, все параметры материала меняются на лету;
+- ресайз, сворачивание и закрытие окна без `Validation Error`.
+
+`git commit -m "Lab2: Blinn-Phong directional light"`.
+
+**Что нужно понимать:** каждое слагаемое §3.2 и его смысл; зачем шейдеру `camera_position`; почему блик зависит
+от камеры, а диффузная часть нет; почему всё считается в мировых координатах; почему свет считаем во фрагментном
+шейдере (нормаль и позиция интерполируются, и освещение вычисляется в каждой точке грани, а не только в
+вершинах); зачем UBO теперь виден фрагментному шейдеру (`stageFlags`).
 
 ---
 
-## 10. Этап F — точечные источники (доп. 2)
-
-### 10.1. Storage-буфер, который растёт
-
-```cpp
-struct LightBuffer {
-	graphics::Buffer buffer;
-	uint32_t capacity = 0;
-};
-
-LightBuffer point_light_buffer;              // начальная ёмкость 8
-std::vector<PointLight> point_lights;        // CPU-копия, её же редактирует UI
-
-// Вызывать в render() ДО vkBeginCommandBuffer
-bool ensureCapacity(LightBuffer& lights, uint32_t count, VkDeviceSize element_size, uint32_t binding) {
-	if (count <= lights.capacity) return true;
-	const uint32_t capacity = std::max(count, lights.capacity * 2);
-	// Безопасно: prepare() дождался конца прошлого кадра, буфер никем не используется
-	graphics::destroyBuffer(lights.buffer);
-	lights.buffer = graphics::createBuffer(capacity * element_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, nullptr);
-	if (lights.buffer.buffer == VK_NULL_HANDLE) return false;
-	lights.capacity = capacity;
-	graphics::writeBufferDescriptor(scene_descriptor_set, binding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, lights.buffer.buffer);
-	return true;
-}
-```
-
-- Буфер нулевого размера создать нельзя, поэтому начальная ёмкость 8 создаётся сразу в `initialize()`.
-- В `render()`: `ensureCapacity(...)`, затем `if (!point_lights.empty()) uploadToBuffer(..., count * sizeof(PointLight))`.
-- `scene_uniforms.point_light_count = uint32_t(point_lights.size())` — в `update()`.
-- Descriptor set обновляется **до** записи команд. Если обновить набор, который уже привязан в записываемом
-  command buffer, этот буфер станет недействительным (ошибка валидации).
-
-### 10.2. Set 0 расширяется
-
-- `scene_set_layout`: + binding 1 `STORAGE_BUFFER`, `FRAGMENT`.
-- Пул: + `STORAGE_BUFFER × 2` (сразу и для прожекторов).
-- После выделения set 0: `writeBufferDescriptor(scene_descriptor_set, 1, STORAGE_BUFFER, point_light_buffer.buffer.buffer)`.
-
-### 10.3. Шейдер
-
-```glsl
-struct PointLight {
-	vec3 position; float intensity;
-	vec3 color;
-};
-layout(std430, set = 0, binding = 1) readonly buffer PointLights {
-	PointLight point_lights[];            // размер не задан, это требование условия
-};
-
-// в main():
-for (uint i = 0; i < scene.point_light_count; ++i) {
-	PointLight light = point_lights[i];
-	vec3 to_light = light.position - v_world_position;
-	float distance2 = max(dot(to_light, to_light), 1e-4);
-	vec3 L = to_light * inversesqrt(distance2);
-	color += blinnPhong(N, V, L, light.color * light.intensity / distance2);   // 1/d²
-}
-```
-
-### 10.4. UI (секция `Point lights`)
-
-```cpp
-ImGui::Text("Count: %zu", point_lights.size());
-if (ImGui::Button("Add point light")) {
-	point_lights.push_back({.position = {0.0f, 1.5f, 2.0f}, .intensity = 5.0f, .color = {1.0f, 1.0f, 1.0f}});
-}
-int remove_index = -1;
-for (size_t i = 0; i < point_lights.size(); ++i) {
-	ImGui::PushID(int(i));                                  // иначе все «Position» — один и тот же виджет
-	if (ImGui::TreeNode("light", "Point light %zu", i)) {
-		ImGui::DragFloat3("Position", &point_lights[i].position.x, 0.05f);
-		ImGui::ColorEdit3("Color", &point_lights[i].color.x);
-		ImGui::DragFloat("Intensity", &point_lights[i].intensity, 0.1f, 0.0f, 100.0f);
-		if (ImGui::Button("Remove")) remove_index = int(i);
-		ImGui::TreePop();
-	}
-	ImGui::PopID();
-}
-if (remove_index >= 0) point_lights.erase(point_lights.begin() + remove_index);   // после цикла
-```
-
-По умолчанию один оранжевый источник: `(2, 1, 1)`, цвет `(1, 0.6, 0.2)`, интенсивность `4`.
-
-✅ **Чекпоинт F:** вокруг точечного источника на полу видно пятно, которое быстро гаснет с расстоянием.
-Добавлено 10+ источников (больше начальной ёмкости 8), ошибок нет. Все удалены — ошибок нет, свет пропал.
-`git commit -m "Lab2: point lights in storage buffer"`.
-
-**Что нужно понимать:** UBO против storage-буфера (размер: UBO гарантированно от 16 КБ, SSBO от 128 МБ;
-std140 против std430; массив без размера возможен только в SSBO); зачем `readonly`; почему 1/d² и что
-происходит при d → 0; зачем `_pad` в C++, но не в GLSL; почему рост буфера и обновление дескриптора безопасны
-именно в `render()` (одна fence) и что изменилось бы при двух кадрах в полёте (буфер и набор на каждый кадр).
-
----
-
-## 11. Этап G — прожекторы (доп. 3) = оценка 4
-
-### 11.1. Настройки в UI и данные для GPU — разные структуры
-
-В UI удобно задавать углы в градусах, а GPU нужны косинусы, поэтому структуры две:
-
-```cpp
-struct SpotLightSettings {
-	math::vec3 position;
-	math::vec3 direction;   // не обязательно единичный, нормализуется в update()
-	math::vec3 color;
-	float intensity;
-	float inner_deg;        // от оси конуса
-	float outer_deg;        // ≥ inner_deg
-};
-std::vector<SpotLightSettings> spot_lights;
-std::vector<SpotLight> spot_lights_gpu;     // заполняется в update(), копируется в render()
-LightBuffer spot_light_buffer;              // начальная ёмкость 8, binding 2
-
-// update():
-spot_lights_gpu.resize(spot_lights.size());
-for (size_t i = 0; i < spot_lights.size(); ++i) {
-	const SpotLightSettings& s = spot_lights[i];
-	spot_lights_gpu[i] = {
-		.position = s.position, .intensity = s.intensity,
-		.direction = safeDirection(s.direction),               // §9.4
-		.cos_inner = std::cos(math::radians(s.inner_deg)),
-		.color = s.color,
-		.cos_outer = std::cos(math::radians(s.outer_deg)),
-	};
-}
-```
-
-### 11.2. Шейдер
-
-```glsl
-struct SpotLight {
-	vec3 position;  float intensity;
-	vec3 direction; float cos_inner;
-	vec3 color;     float cos_outer;
-};
-layout(std430, set = 0, binding = 2) readonly buffer SpotLights {
-	SpotLight spot_lights[];
-};
-
-// в main():
-for (uint i = 0; i < scene.spot_light_count; ++i) {
-	SpotLight light = spot_lights[i];
-	vec3 to_light = light.position - v_world_position;
-	float distance2 = max(dot(to_light, to_light), 1e-4);
-	vec3 L = to_light * inversesqrt(distance2);
-
-	float cos_theta = dot(-L, light.direction);              // угол между осью и направлением на фрагмент
-	float edge = light.cos_inner - light.cos_outer;          // > 0, если outer > inner
-	float cone = edge > 0.0 ? clamp((cos_theta - light.cos_outer) / edge, 0.0, 1.0)
-	                        : step(light.cos_outer, cos_theta);   // outer == inner → жёсткий край
-
-	color += blinnPhong(N, V, L, light.color * light.intensity * cone / distance2);
-}
-```
-
-Проверка формулы края: внутри внутреннего конуса `cos θ ≥ cos_inner`, значит `cone ≥ 1` → после clamp 1.
-На внешней границе `cos θ = cos_outer` → 0. Между ними — линейный переход. Сзади прожектора `cos θ < 0` → 0.
-
-### 11.3. Set 0 и render
-
-- `scene_set_layout`: + binding 2 `STORAGE_BUFFER`, `FRAGMENT` (пул уже рассчитан на 2 SSBO, §10.2).
-- `writeBufferDescriptor(scene_descriptor_set, 2, ...)` при создании; `ensureCapacity(spot_light_buffer, ..., sizeof(SpotLight), 2)` в `render()`.
-- `scene_uniforms.spot_light_count = uint32_t(spot_lights.size())`.
-
-### 11.4. UI (секция `Spot lights`)
-
-Так же, как у точечных (§10.4, `PushID`, удаление после цикла), плюс:
-
-```cpp
-ImGui::DragFloat3("Direction", &s.direction.x, 0.02f);
-ImGui::SliderFloat("Inner angle", &s.inner_deg, 0.0f, 89.0f);
-ImGui::SliderFloat("Outer angle", &s.outer_deg, 0.0f, 89.0f);
-s.outer_deg = std::max(s.outer_deg, s.inner_deg);         // внешний не меньше внутреннего
-```
-
-По умолчанию один белый прожектор над пирамидой: позиция `(−3, 4, 2)`, направление на пирамиду `(3, −3.5, −2)`,
-интенсивность `25`, inner `12°`, outer `20°`. Кнопка «Add» создаёт прожектор `(0, 4, 0)` с направлением вниз.
-
-✅ **Чекпоинт G = оценка 4:** на полу видно круглое пятно прожектора с плавным краем. Если сделать outer = inner,
-край становится резким, а увеличение outer размывает его. Прожекторы добавляются (больше 8) и удаляются, все
-параметры меняются на лету. Нет `Validation Error`, в том числе при закрытии. `git commit -m "Lab2: spot lights with soft edges"`.
-
-**Что нужно понимать:** почему сравниваются косинусы, а не углы; формула мягкого края и что происходит при
-`outer == inner`; почему углы отсчитываются от оси (половина раствора); почему прожектор подчиняется тому же
-закону 1/d², что и точечный источник.
-
-### 11.5. (Необязательно, «креатив») анимация
-
-Checkbox `Animate point lights`: в `update()` позиции точечных источников вращаются вокруг оси Y
-(`rotateY(dt · speed)` применить к позиции). Около 10 строк. Делать только после чекпоинта G.
-
----
-
-## 12. Типичные ловушки
+## 9. Типичные ловушки
 
 | Симптом | Причина / что делать |
 |---------|---------------------|
-| Всё чёрное | Нормаль или направление нулевые → NaN (§9.4); перепутан порядок set layouts в pipeline layout; интенсивности 0 |
-| Грани пирамиды сглажены, нет чётких рёбер | Общие вершины (5 вместо 16) — §3.5 |
-| Пирамида освещена «изнутри» / тёмная сторона светится | Нормали внутрь (обход граней) или `L` с неверным знаком (`−direction` у направленного) |
+| Всё чёрное | Направление света нулевое → NaN (§8.4); интенсивность 0; поля UBO съехали (§4) |
+| Цвета/свет «странные», меняется не тот параметр | C++-структура не совпадает с std140: нет `_pad` → `static_assert` (§4) |
+| `Validation Error` при создании pipeline про stage / descriptor | `stageFlags` у binding 0 без `FRAGMENT_BIT` (§8.1) |
+| Грани сглажены, нет чётких рёбер | Общие вершины (5 вместо 16) — §3.3 |
+| Освещены не те грани / «изнутри» | Нормали внутрь (порядок обхода) или `L = +direction` вместо `−direction` |
 | Блик на неосвещённой стороне | Нет проверки `N·L > 0` перед бликом |
-| Источники «мусорные», мигают, сдвинуты | Размер C++-структуры не равен std430 (нет `_pad`) → `static_assert` (§4) |
-| Пол тёмный вдали от точечного источника | Так и должно быть (1/d²); увеличить интенсивность |
-| Пятна света «едут» вместе с камерой | Смешаны системы координат: всё должно быть в мировых, включая `camera_position` |
-| После 8 источников новые не светят | Нет `ensureCapacity` или счётчик берётся из `.length()` (§4) |
-| `Validation Error … descriptor set … updated … while bound` | Дескриптор обновлён после `vkCmdBindDescriptorSets` в том же кадре → `ensureCapacity` до `vkBeginCommandBuffer` |
-| `Validation Error` про размер буфера 0 | Создан SSBO нулевого размера → начальная ёмкость ≥ 1 |
-| Правишь один источник, а меняются все | Нет `ImGui::PushID(i)` |
-| Падение при Remove | `erase` внутри цикла по тому же вектору → удалять после цикла |
-| Резкий край прожектора при outer > inner | В буфер записаны градусы, а не косинусы; или `edge` с обратным знаком |
-| NaN-пятна при shininess 0 | `pow(0, 0)` → минимум слайдера 1 |
+| Блик не двигается при движении камеры | В шейдер не передаётся `camera_position` или `V` считается без неё |
+| NaN-пятна при shininess 0 | `pow(0, 0)` → минимум слайдера 1 и `AlwaysClamp` |
+| Меняешь «Color» в одной секции, меняется в другой | Одинаковые подписи без `PushID` (§8.3) |
 | Картинка переворачивается при большом наклоне | pitch не ограничен ±89° |
-| Слишком светло, «выцветшие» цвета | sRGB swapchain (§3.6) — это нормально, уменьшить ambient |
-| Изменения в шейдере не применяются | Нет `compile_shader(lit.*)` в CMakeLists или запуск не из корня |
+| Слишком светло, «выцветшие» цвета | sRGB swapchain (§3.4) — это нормально, уменьшить ambient |
+| `multiple definition of 'math::…'` | Функции в `math.hpp` без `inline` (§5) |
+| `Failed to open shaders/…spv` | Запуск не из корня проекта |
 
 ---
 
-## 13. README, отчёт, git
+## 10. README, отчёт, git
 
-### 13.1. Git
+### 10.1. Git
 
-- Ветка `lab2` уже создана от `lab1`. Первый коммит: `lab2/` (PDF, read.txt, PLAN.md) — «Lab2: add assignment, teacher notes and plan».
-- По коммиту на каждый чекпоинт A–G.
-- В конце: `git push -u origin lab2`, затем слить в `master` (в lab 1 слияние не делалось, сначала смержить `lab1`).
+- Ветка `lab2` уже есть (коммит `prepare lab2`). По коммиту на каждый чекпоинт A–D.
+- В конце: `git push -u origin lab2`, затем слить в `master` (лаба 1 туда тоже ещё не слита).
 
-### 13.2. `lab2/README.md` (как [lab1/README.md](../lab1/README.md))
+### 10.2. `lab2/README.md` (как [lab1/README.md](../lab1/README.md))
 
-- «Лабораторная работа №2. Камера и освещение» + краткое условие + «выполнено: базовое + доп. 1–3»;
-- что сделано (Блинн-Фонг, 3 типа источников, 1/d², мягкие края, set 0/set 1, storage-буферы);
+- «Лабораторная работа №2. Камера и освещение» + условие + «выполнено базовое задание (оценка 3)»;
+- что сделано: свободная камера, процедурные нормали, Блинн-Фонг, направленный свет, ambient, материал;
 - сборка и запуск (на Fedora: `cmake --preset debug`; ссылка на lab1/README для Ubuntu/Mint);
-- таблица элементов UI по секциям;
-- 2–3 скриншота в `lab2/screenshots/`.
+- таблица элементов UI;
+- 2 скриншота в `lab2/screenshots/`.
 
-### 13.3. Отчёт по образцу
+### 10.3. Отчёт по образцу
 
 ```bash
 cp "lab1/3XX_Фамилия_ЛабX.docx" "lab2/3XX_<Фамилия>_Лаб2.docx"
@@ -888,51 +562,46 @@ cp "lab1/3XX_Фамилия_ЛабX.docx" "lab2/3XX_<Фамилия>_Лаб2.doc
 | Часть | Что вписать |
 |-------|-------------|
 | Титул | «Лабораторная работа №**2**», тема «Камера и освещение» |
-| **Условие** | Цель из PDF, «выполнено базовое задание и дополнительные 1–3» |
-| **Метод решения** | Камера (view как обратная матрица, §6.2); flat-нормали через векторное произведение (§7.2); Блинн-Фонг (§3.2); три типа источников и 1/d²; мягкий край прожектора; normal matrix; раскладка std140/std430 (таблица §4); set 0 / set 1, storage-буферы с ростом ёмкости |
-| **Результаты** | Скриншоты: (1) только направленный + ambient; (2) несколько цветных точечных; (3) прожектор: мягкий край против жёсткого (outer = inner); (4) разный shininess |
-| **Выводы** | «Я научился…»: модель освещения, типы источников, нормали, дескрипторы нескольких наборов, storage-буферы |
+| **Условие** | Цель из PDF, «выполнено базовое задание» |
+| **Метод решения** | Камера (view как обратная матрица, §6.2); нормали через векторное произведение (§7.2); Блинн-Фонг (§3.2); направленный источник; почему normal matrix = поворот; раскладка UBO std140 (§4) |
+| **Результаты** | Скриншоты: (1) пирамида по умолчанию; (2) другой shininess / цвет света; (3) другой ракурс камеры |
+| **Выводы** | «Я научился…»: камера, нормали, модель освещения Блинн-Фонга, выравнивание std140 |
 
 `libreoffice --headless --convert-to pdf --outdir lab2 "lab2/3XX_<Фамилия>_Лаб2.docx"`
 
-### 13.4. Финальная проверка
+### 10.4. Финальная проверка
 
-- [ ] `rm -rf build-debug && cmake --preset debug && cmake --build build-debug --parallel` — собирается с нуля без ошибок и без новых предупреждений.
-- [ ] 2 минуты работы: добавить/удалить по 10 источников каждого типа, ресайз, сворачивание, закрытие → нет `Validation Error`.
-- [ ] Нет временных проверок математики (§5) и отладочных шейдеров (§7.4, §8.3).
+- [ ] `rm -rf build-debug && cmake --preset debug && cmake --build build-debug --parallel` — с нуля без ошибок.
+- [ ] Минута работы + ресайз + сворачивание + закрытие — нет `Validation Error`.
+- [ ] Нет временной проверки математики (§5) и отладочного вывода нормалей (§7.3).
 - [ ] README, отчёт PDF, скриншоты в `lab2/`.
 
 ---
 
-## 14. Подготовка к защите
+## 11. Подготовка к защите
 
-**На 4 нужно ответить на ВСЕ вопросы.** К каждому пункту — 2–3 предложения своими словами, плюс уметь показать
-место в коде.
+Для 3 достаточно ответить правильно **на один** вопрос из 3–4, но вопросы случайные, поэтому подготовь все
+пункты, по 2–3 предложения на каждый.
 
 **Освещение и математика**
 1. Формула Блинн-Фонга: ambient, diffuse, specular; смысл `N·L`; что такое `H`; чем отличается от Фонга.
 2. Что задаёт `shininess` и почему с ростом блик становится меньше и резче.
-3. Чем отличаются направленный, точечный и прожекторный источники: как в каждом получается `L`.
-4. Закон обратных квадратов: почему `1/d²`; чем отличается от `Kc + Kl·d + Kq·d²` из learnopengl; что при `d → 0`.
-5. Прожектор: зачем косинусы, формула мягкого края, что при `outer == inner`, почему сзади не светит.
-6. Нормали: как сгенерированы (векторное произведение, порядок обхода); почему 16 вершин, а не 5.
-7. Normal matrix: почему не матрица модели; `transpose(inverse(M))`; почему у нас это просто поворот; пример с
-   неравномерным масштабом.
-8. Зачем `normalize(v_normal)` во фрагментном шейдере.
-9. Камера: view как обратная матрица; порядок `rotateX(−pitch)·rotateY(−yaw)·translate(−p)`; формула `forward`.
-10. Почему освещение в мировых координатах и зачем шейдеру `camera_position`.
-11. Почему освещение во фрагментном, а не в вершинном шейдере.
+3. Направленный источник: почему `L = −direction` одинаковый для всех точек и почему нет затухания.
+4. Нормали: как сгенерированы (векторное произведение, порядок обхода); почему 16 вершин, а не 5.
+5. Normal matrix: почему в общем случае не матрица модели; почему у нас хватает `mat3(model)`.
+6. Зачем `normalize(v_normal)` во фрагментном шейдере.
+7. Камера: view как обратная матрица; порядок `rotateX(−pitch)·rotateY(−yaw)·translate(−p)`; формула `forward`.
+8. Почему освещение в мировых координатах и зачем шейдеру `camera_position`.
+9. Почему освещение во фрагментном, а не в вершинном шейдере.
 
 **Vulkan и код**
-12. Descriptor set layout / pool / set / pipeline layout; set и binding в GLSL; как считаются размеры пула.
-13. Зачем два набора; как часто привязывается каждый; что делает `firstSet = 1`.
-14. UBO против storage-буфера: размеры, std140 против std430, массив без размера, `readonly`.
-15. Раскладка своих структур: смещения полей, где и зачем `_pad`, почему `normal_matrix` — `mat4`.
-16. Как число источников попадает в шейдер и почему не `.length()`.
-17. Рост storage-буфера: почему безопасно удалять буфер и обновлять дескриптор в `render()`; что было бы при 2 кадрах в полёте.
-18. Почему у каждого объекта свой UBO, а не один общий, перезаписываемый между draw-вызовами.
-19. Vertex input: два атрибута, `location`, `offsetof`, stride.
-20. Порядок кадра: что в `update()`, что в `render()` и почему (лаба 1, §3.4).
+10. Как данные попадают в шейдер: структура C++ → `VkBuffer` → descriptor set → `uniform` в GLSL.
+11. Раскладка `Uniforms`: `vec3` занимает 12 байт, но начинается только с адреса, кратного 16; поэтому после
+    `vec3` помещается один `float`, а если его нет — где и зачем `_pad`; почему в GLSL их нет.
+12. Зачем `stageFlags` с `FRAGMENT_BIT`.
+13. Vertex input: два атрибута, `location`, `offsetof`, stride.
+14. Порядок кадра: что в `update()`, что в `render()` и почему UBO копируется в `render()` (лаба 1, §3.4).
+15. Почему функции в `math.hpp` помечены `inline`.
 
-Совет из лабы 1 здесь ещё важнее: после каждого этапа объясни свой код вслух. Тройку можно получить одним
-ответом, четвёрку — нет.
+Совет из лабы 1: после каждого этапа объясни свой код вслух. Если где-то «ну, так работает», разберись, прежде
+чем идти дальше.
